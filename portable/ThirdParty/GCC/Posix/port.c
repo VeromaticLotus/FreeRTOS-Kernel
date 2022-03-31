@@ -58,7 +58,9 @@
 #include <string.h>
 #include <sys/time.h>
 #include <sys/times.h>
+#include <threads.h>
 #include <time.h>
+#include <unistd.h>
 
 /* Scheduler includes. */
 #include "FreeRTOS.h"
@@ -96,7 +98,7 @@ static sigset_t xResumeSignals;
 static sigset_t xAllSignals;
 static sigset_t xSchedulerOriginalSignalMask;
 static pthread_t hMainThread = ( pthread_t )NULL;
-static volatile portBASE_TYPE uxCriticalNesting;
+static thread_local portBASE_TYPE uxCriticalNesting;
 /*-----------------------------------------------------------*/
 
 static portBASE_TYPE xSchedulerEnd = pdFALSE;
@@ -105,6 +107,7 @@ static portBASE_TYPE xSchedulerEnd = pdFALSE;
 static void prvSetupSignalsAndSchedulerPolicy( void );
 static void prvSetupTimerInterrupt( void );
 static void *prvWaitForStart( void * pvParams );
+static void *prvGenerateAlarms( void * pvParams );
 static void prvSwitchThread( Thread_t * xThreadToResume,
                              Thread_t *xThreadToSuspend );
 static void prvSuspendSelf( Thread_t * thread);
@@ -337,30 +340,8 @@ static uint64_t prvStartTimeNs;
  */
 void prvSetupTimerInterrupt( void )
 {
-struct itimerval itimer;
-int iRet;
-
-    /* Initialise the structure with the current timer information. */
-    iRet = getitimer( ITIMER_REAL, &itimer );
-    if ( iRet )
-    {
-        prvFatalError( "getitimer", errno );
-    }
-
-    /* Set the interval between timer events. */
-    itimer.it_interval.tv_sec = 0;
-    itimer.it_interval.tv_usec = portTICK_RATE_MICROSECONDS;
-
-    /* Set the current count-down. */
-    itimer.it_value.tv_sec = 0;
-    itimer.it_value.tv_usec = portTICK_RATE_MICROSECONDS;
-
-    /* Set-up the timer interrupt. */
-    iRet = setitimer( ITIMER_REAL, &itimer, NULL );
-    if ( iRet )
-    {
-        prvFatalError( "setitimer", errno );
-    }
+    pthread_t thread;
+    pthread_create( &thread, NULL, &prvGenerateAlarms, NULL);
 
     prvStartTimeNs = prvGetTimeNs();
 }
@@ -422,6 +403,20 @@ Thread_t *pxThreadToCancel = prvGetThreadFromTask( pxTaskToDelete );
     event_delete( pxThreadToCancel->ev );
 }
 /*-----------------------------------------------------------*/
+
+static void *prvGenerateAlarms( void * pvParams )
+{
+	while (true)
+	{
+		if (usleep(portTICK_RATE_MICROSECONDS) == 0)
+		{
+			Thread_t *activeTask = prvGetThreadFromTask( xTaskGetCurrentTaskHandle() );
+
+			pthread_kill(activeTask->pthread, 14);
+		}
+	}
+	return NULL;
+}
 
 static void *prvWaitForStart( void * pvParams )
 {
